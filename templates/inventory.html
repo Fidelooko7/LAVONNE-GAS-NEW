@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block title %}Inventory | Lavonne Gas{% endblock %}
+{% block content %}
+
+<div class="page-title">
+  <div>
+    <p class="eyebrow">LIVE STOCK</p>
+    <h1>Cylinder Inventory</h1>
+    <p class="muted">Full and empty cylinders per brand and size. Adjust stock when needed. Confirm remaining stock daily.</p>
+  </div>
+</div>
+
+{% set total_full = products | sum(attribute='full_qty') %}
+{% set total_empty = products | sum(attribute='empty_qty') %}
+{% set full_6 = products | selectattr('size', 'equalto', '6kg') | sum(attribute='full_qty') %}
+{% set full_13 = products | selectattr('size', 'equalto', '13kg') | sum(attribute='full_qty') %}
+{% set empty_6 = products | selectattr('size', 'equalto', '6kg') | sum(attribute='empty_qty') %}
+{% set empty_13 = products | selectattr('size', 'equalto', '13kg') | sum(attribute='empty_qty') %}
+
+<div class="metric-grid" style="margin-bottom:24px;">
+  <div class="metric">
+    <span>Total Full Cylinders</span>
+    <strong>{{ total_full }}</strong>
+    <small>All brands in the shop</small>
+  </div>
+  <div class="metric">
+    <span>Total Empty Cylinders</span>
+    <strong>{{ total_empty }}</strong>
+    <small>Waiting for refill / return</small>
+  </div>
+  <div class="metric">
+    <span>6kg Full / Empty</span>
+    <strong>{{ full_6 }} / {{ empty_6 }}</strong>
+  </div>
+  <div class="metric">
+    <span>13kg Full / Empty</span>
+    <strong>{{ full_13 }} / {{ empty_13 }}</strong>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="section-head">
+    <h2>Stock by Brand & Size</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Brand</th>
+          <th>Size</th>
+          <th>Full</th>
+          <th>Empty</th>
+          <th>Total</th>
+          <th>Adjust Stock</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr>
+          <td><strong>{{ p.brand }}</strong></td>
+          <td>{{ p.size }}</td>
+          <td><b>{{ p.full_qty }}</b></td>
+          <td>{{ p.empty_qty }}</td>
+          <td>{{ p.full_qty + p.empty_qty }}</td>
+          <td>
+            <form class="inline-form" method="post">
+              <input type="hidden" name="product_id" value="{{ p.id }}">
+              <input type="number" name="full_qty" placeholder="Full ±" style="width:70px">
+              <input type="number" name="empty_qty" placeholder="Empty ±" style="width:70px">
+              <button class="small-btn">Update</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No products / stock records yet. Add products first.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted" style="margin-top:12px;font-size:13px;">
+    Tip: Enter positive numbers to add stock, negative to reduce. Both attendant and admin should confirm remaining stock at the end of each day.
+  </p>
+</section>
+{% endblock %}

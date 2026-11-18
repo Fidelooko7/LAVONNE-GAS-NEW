@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% block title %}News | Lavonne Gas{% endblock %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">ANNOUNCEMENTS</p>
+    <h1>Manage News</h1>
+    <p class="muted">Add price changes, service updates and notices with optional photos.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <h2 style="margin-bottom:14px;">Publish New Announcement</h2>
+  <form method="post" enctype="multipart/form-data" class="form-grid">
+    <label>Title <input name="title" required placeholder="e.g. New 13kg refill price"></label>
+    <label>Tag
+      <select name="tag">
+        <option>Price Update</option>
+        <option>Service</option>
+        <option>Info</option>
+        <option>Alert</option>
+      </select>
+    </label>
+    <label>Body / Message
+      <textarea name="body" rows="3" required placeholder="Write the announcement..."></textarea>
+    </label>
+    <label>Photo / Graphic (optional)
+      <input type="file" name="image" accept="image/*">
+    </label>
+    <label><input type="checkbox" name="important" value="1"> Mark as important</label>
+    <button type="submit">Publish</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2 style="margin-bottom:12px;">All Announcements</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Title</th><th>Tag</th><th>Status</th><th>Date</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        {% for n in rows %}
+        <tr>
+          <td><strong>{{ n.title }}</strong><br><small>{{ n.body[:80] }}{% if n.body|length > 80 %}...{% endif %}</small></td>
+          <td>{{ n.tag }}</td>
+          <td>{{ 'Active' if n.active else 'Hidden' }}</td>
+          <td>{{ n.created_at[:10] if n.created_at else '—' }}</td>
+          <td>
+            <form method="post" action="{{ url_for('news_toggle', nid=n.id) }}">
+              <button class="small-btn">{{ 'Hide' if n.active else 'Show' }}</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No announcements yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

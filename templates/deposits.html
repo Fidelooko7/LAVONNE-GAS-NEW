@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block title %}Cylinder Deposits | Lavonne Gas{% endblock %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">CYLINDER CONTROL</p>
+    <h1>Cylinder Deposits</h1>
+    <p class="muted">Track customers who took cylinders without returning empties.</p>
+  </div>
+</div>
+
+<div class="metric-grid" style="margin-bottom:24px;">
+  <div class="metric">
+    <span>Outstanding Cylinders with Customers</span>
+    <strong style="color:var(--primary);">{{ outstanding }}</strong>
+  </div>
+</div>
+
+<section class="panel">
+  <h2 style="margin-bottom:14px;">Record New Deposit</h2>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="action" value="add">
+    <label>Customer
+      <select name="customer_id" required>
+        {% for c in customers %}
+        <option value="{{ c.id }}">{{ c.name }} ({{ c.phone }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Product (optional)
+      <select name="product_id">
+        <option value="">— Any / Unknown —</option>
+        {% for p in products %}
+        <option value="{{ p.id }}">{{ p.brand }} {{ p.size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Quantity <input type="number" name="qty" value="1" min="1"></label>
+    <label>Deposit Amount (KSh) <input type="number" name="deposit_amount" step="0.01" value="0"></label>
+    <label>Note <input name="note" placeholder="e.g. Delivered, empty not returned"></label>
+    <button type="submit">Record Deposit</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2 style="margin-bottom:12px;">Deposit Records</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Customer</th><th>Phone</th><th>Product</th><th>Qty</th><th>Deposit</th><th>Status</th><th>Issued</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        {% for d in rows %}
+        <tr>
+          <td>{{ d.name }}</td>
+          <td>{{ d.phone }}</td>
+          <td>{{ (d.brand or '') ~ ' ' ~ (d.size or '') if d.brand else '—' }}</td>
+          <td>{{ d.qty }}</td>
+          <td>KSh {{ money(d.deposit_amount) }}</td>
+          <td><span class="status {{ 'paid' if d.status=='returned' else 'overdue' }}">{{ d.status }}</span></td>
+          <td>{{ d.issued_at[:10] if d.issued_at else '—' }}</td>
+          <td>
+            {% if d.status == 'outstanding' %}
+            <form method="post">
+              <input type="hidden" name="action" value="return">
+              <input type="hidden" name="deposit_id" value="{{ d.id }}">
+              <button class="small-btn">Mark Returned</button>
+            </form>
+            {% else %}Returned{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">No cylinder deposits recorded.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

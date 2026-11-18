@@ -1,0 +1,137 @@
+{% extends 'base.html' %}
+{% block title %}Sales | Lavonne Gas{% endblock %}
+{% block content %}
+
+<div class="page-title">
+  <div>
+    <p class="eyebrow">POINT OF SALE</p>
+    <h1>Sales</h1>
+    <p class="muted">Record sales and view daily / weekly performance.</p>
+  </div>
+</div>
+
+<!-- WEEKDAY + WEEK + MONTH SUMMARY -->
+<section class="panel" style="margin-bottom:24px;">
+  <h2 style="margin-bottom:14px;">This Week’s Sales</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Day</th>
+          <th>Date</th>
+          <th>Transactions</th>
+          <th>Cylinders Sold</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in days %}
+        <tr {% if d.date == today %}style="background:#fff5f7;"{% endif %}>
+          <td><strong>{{ d.day }}</strong></td>
+          <td>{{ d.date }}</td>
+          <td>{{ d.txs }}</td>
+          <td>{{ d.units }}</td>
+          <td>KSh {{ money(d.amount) }}</td>
+        </tr>
+        {% endfor %}
+        <tr style="font-weight:700;background:#f8f4f6;">
+          <td colspan="2">WEEK TOTAL</td>
+          <td>{{ days|sum(attribute='txs') }}</td>
+          <td>{{ week_total_units }}</td>
+          <td>KSh {{ money(week_total_amount) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="metric-grid" style="margin-top:18px;">
+    <div class="metric">
+      <span>This Month so far</span>
+      <strong>KSh {{ money(month_amount) }}</strong>
+      <small>{{ month_units }} cylinders · {{ month_txs }} transactions 📈</small>
+    </div>
+  </div>
+</section>
+
+<!-- RECORD NEW SALE -->
+<section class="panel">
+  <h2 style="margin-bottom:14px;">Record a Sale</h2>
+  <form method="post" class="form-grid">
+    <label>Product
+      <select name="product_id" required>
+        {% for p in products %}
+        <option value="{{ p.id }}">{{ p.brand }} {{ p.size }} ({{ p.full_qty }} full)</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Quantity
+      <input type="number" name="qty" min="1" value="1" required>
+    </label>
+    <label>Unit Price (KSh)
+      <input type="number" name="unit_price" step="0.01" min="0" required>
+    </label>
+    <label>Amount Paid (KSh)
+      <input type="number" name="paid" step="0.01" min="0" required>
+    </label>
+    <label>Payment Method
+      <select name="method">
+        <option value="cash">Cash</option>
+        <option value="mpesa">M-Pesa</option>
+        <option value="mpesa_till">M-Pesa Till</option>
+        <option value="split">Split (Cash + Till)</option>
+        <option value="bank">Bank</option>
+      </select>
+    </label>
+    <label>Customer (required if not fully paid)
+      <select name="customer_id">
+        <option value="">— Walk-in / Fully paid —</option>
+        {% for c in customers %}
+        <option value="{{ c.id }}">{{ c.name }} ({{ c.phone }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Sale Type
+      <select name="sale_type">
+        <option value="refill">Refill / Exchange</option>
+        <option value="complete">Complete Cylinder (cylinder leaves)</option>
+      </select>
+    </label>
+    <button type="submit">Save Sale</button>
+  </form>
+</section>
+
+<!-- RECENT SALES -->
+<section class="panel">
+  <h2 style="margin-bottom:12px;">Recent Sales</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Product</th>
+          <th>Qty</th>
+          <th>Total</th>
+          <th>Paid</th>
+          <th>Method</th>
+          <th>Customer</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in rows %}
+        <tr>
+          <td>{{ s.sale_date[:16] if s.sale_date else '—' }}</td>
+          <td>{{ s.brand }} {{ s.size }}</td>
+          <td>{{ s.qty }}</td>
+          <td>KSh {{ money(s.total) }}</td>
+          <td>KSh {{ money(s.paid) }}</td>
+          <td>{{ s.payment_method }}</td>
+          <td>{{ s.customer or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">No sales recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

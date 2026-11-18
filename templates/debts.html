@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}Debts | Lavonne Gas{% endblock %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">CREDIT CONTROL</p>
+    <h1>Debt Ledger</h1>
+    <p class="muted">Track every debt, partial payments and remaining balances.</p>
+  </div>
+</div>
+
+{% set total_balance = debts | sum(attribute='balance') %}
+<div class="metric-grid" style="margin-bottom:24px;">
+  <div class="metric">
+    <span>Total Outstanding Debts</span>
+    <strong style="color:var(--primary);">KSh {{ money(total_balance) }}</strong>
+    <small>{{ debts|length }} active debt record(s)</small>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Customer Name</th>
+          <th>Phone / Contact</th>
+          <th>Date Issued</th>
+          <th>Original</th>
+          <th>Amount Paid</th>
+          <th>Balance</th>
+          <th>Due Date</th>
+          <th>Status</th>
+          <th>Record Payment</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in debts %}
+        <tr>
+          <td><strong>{{ d.name }}</strong></td>
+          <td>{{ d.phone or '—' }}</td>
+          <td>{{ d.issued_at[:10] if d.issued_at else '—' }}</td>
+          <td>KSh {{ money(d.original) }}</td>
+          <td>KSh {{ money(d.paid) }}</td>
+          <td><b style="color:{% if d.balance > 0 %}var(--primary){% else %}var(--green){% endif %}">KSh {{ money(d.balance) }}</b></td>
+          <td>{{ d.due_date }}</td>
+          <td><span class="status {{ d.status|lower|replace(' ','-') }}">{{ d.status }}</span></td>
+          <td>
+            {% if d.balance > 0 %}
+            <form method="post" action="{{ url_for('debt_payment', did=d.id) }}" class="pay-form">
+              <input type="number" name="amount" min="0.01" max="{{ d.balance }}" step="0.01" placeholder="Amount" required>
+              <select name="method">
+                <option value="cash">Cash</option>
+                <option value="mpesa">M-Pesa</option>
+                <option value="mpesa_till">M-Pesa Till</option>
+                <option value="bank">Bank</option>
+              </select>
+              <button class="small-btn">Save</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">No debts recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 style="margin-bottom:12px;">Recent Debt Payments</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Customer</th><th>Amount</th><th>Method</th><th>Date</th></tr>
+      </thead>
+      <tbody>
+        {% for p in payments %}
+        <tr>
+          <td>{{ p.customer }}</td>
+          <td>KSh {{ money(p.amount) }}</td>
+          <td>{{ p.method }}</td>
+          <td>{{ p.paid_at[:16] if p.paid_at else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No payments recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

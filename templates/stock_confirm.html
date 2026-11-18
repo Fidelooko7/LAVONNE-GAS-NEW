@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}Daily Stock Confirm | Lavonne Gas{% endblock %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">DAILY CONTROL</p>
+    <h1>Confirm Remaining Stock</h1>
+    <p class="muted">Attendant enters actual counts. Admin can review. This updates live stock.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <form method="post">
+    <label style="display:block;margin-bottom:14px;">Confirmation Date
+      <input type="date" name="confirm_date" value="{{ today }}" required>
+    </label>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Brand</th><th>Size</th><th>Current Full</th><th>Current Empty</th><th>Confirm Full</th><th>Confirm Empty</th></tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr>
+            <td>{{ p.brand }}</td>
+            <td>{{ p.size }}</td>
+            <td>{{ p.full_qty }}</td>
+            <td>{{ p.empty_qty }}</td>
+            <td><input type="number" name="full_{{ p.id }}" value="{{ p.full_qty }}" min="0" style="width:80px"></td>
+            <td><input type="number" name="empty_{{ p.id }}" value="{{ p.empty_qty }}" min="0" style="width:80px"></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="empty">No products found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="submit" style="margin-top:16px;"><i class="fas fa-check"></i> Confirm Today's Stock</button>
+  </form>
+</section>
+{% endblock %}
