@@ -4,7 +4,7 @@ from werkzeug.utils import secure_filename
 from functools import wraps
 from datetime import datetime, date, timedelta
 from pathlib import Path
-import sqlite3, os, secrets
+import sqlite3, os, secrets, hmac
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'instance' / 'lavonne_v3.db'
@@ -108,6 +108,43 @@ def login():
             session.clear(); session['uid']=u['id']; audit('login','Signed in'); return redirect(request.args.get('next') or url_for('dashboard'))
         flash('Incorrect username or password.','error')
     return render_template('login.html')
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        code = request.form.get('recovery_code', '')
+        new = request.form.get('new_password', '')
+        confirm = request.form.get('confirm_password', '')
+        configured_code = os.environ.get('LAVONNE_ADMIN_RECOVERY_CODE', '')
+
+        if not configured_code:
+            flash('Password recovery is not configured yet.', 'error')
+        elif len(new) < 10 or new != confirm:
+            flash('Passwords must match and contain at least 10 characters.', 'error')
+        else:
+            c = db()
+            u = c.execute(
+                "SELECT id FROM users WHERE username=? AND role='admin' AND active=1",
+                (username,)
+            ).fetchone()
+
+            valid_code = hmac.compare_digest(code, configured_code)
+            if u and valid_code:
+                c.execute(
+                    "UPDATE users SET password_hash=? WHERE id=? AND role='admin'",
+                    (generate_password_hash(new), u['id'])
+                )
+                c.commit()
+                c.close()
+                flash('Administrator password reset. Please sign in.', 'success')
+                return redirect(url_for('login'))
+
+            c.close()
+            flash('Recovery details are incorrect.', 'error')
+
+    return render_template('forgot_password.html')
+
 @app.route('/logout')
 def logout(): session.clear(); return redirect(url_for('home'))
 
