@@ -5,6 +5,17 @@ from functools import wraps
 from datetime import datetime, date, timedelta
 from pathlib import Path
 import sqlite3, os, secrets, hmac
+import re
+import psycopg
+from psycopg.rows import dict_row
+
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+if os.environ.get('RENDER') and not DATABASE_URL:
+    raise RuntimeError('DATABASE_URL is required on Render; refusing to start with a separate SQLite database.')
+USE_POSTGRES = bool(DATABASE_URL)
+if USE_POSTGRES and DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = 'postgresql://' + DATABASE_URL[len('postgres://'):]
+DB_INTEGRITY_ERROR = psycopg.IntegrityError if USE_POSTGRES else sqlite3.IntegrityError
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'instance' / 'lavonne_v3.db'
@@ -37,10 +48,57 @@ CREATE TABLE IF NOT EXISTS cylinder_deposits(id INTEGER PRIMARY KEY, customer_id
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), action TEXT NOT NULL, details TEXT NOT NULL, created_at TEXT NOT NULL);
 '''
+class PostgreSQLCompat:
+    """Small adapter so existing ? placeholders and connection calls keep working."""
+    def __init__(self):
+        self.raw = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+    def execute(self, query, params=()):
+        # The app's SQL statements use ? only as parameter placeholders.
+        return self.raw.execute(query.replace('?', '%s'), params)
+
+    def commit(self):
+        self.raw.commit()
+
+    def rollback(self):
+        self.raw.rollback()
+
+    def close(self):
+        self.raw.close()
+
+
 def db():
-    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+    if USE_POSTGRES:
+        return PostgreSQLCompat()
+    c=sqlite3.connect(DB)
+    c.row_factory=sqlite3.Row
+    c.execute('PRAGMA foreign_keys=ON')
+    return c
+
 
 def init_db():
+    if USE_POSTGRES:
+        # PostgreSQL schema and migrated records are created separately.
+        # Never run the SQLite schema or alter production tables at startup.
+        c = db()
+        required = {
+            'users', 'products', 'stock', 'customers', 'sales', 'debts',
+            'debt_payments', 'purchases', 'expenses', 'orders', 'news',
+            'stock_confirmations', 'cylinder_deposits', 'settings', 'audit'
+        }
+        rows = c.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_type='BASE TABLE'"
+        ).fetchall()
+        present = {r['table_name'] for r in rows}
+        missing = sorted(required - present)
+        c.close()
+        if missing:
+            raise RuntimeError(
+                'PostgreSQL database is missing required tables: ' + ', '.join(missing)
+            )
+        return
+
     c=db()
     c.executescript(SCHEMA)
     columns = [r['name'] for r in c.execute('PRAGMA table_info(orders)').fetchall()]
@@ -48,6 +106,7 @@ def init_db():
         c.execute('ALTER TABLE orders ADD COLUMN customer_id INTEGER REFERENCES customers(id)')
     c.commit()
     c.close()
+
 init_db()
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -126,11 +185,10 @@ def customer_register():
                 session.permanent = True
                 return redirect(url_for('customer_dashboard'))
             else:
-                c.execute(
-                    'INSERT INTO customers(name,phone,address,password_hash,created_at) VALUES(?,?,?,?,?)',
+                cid = c.execute(
+                    'INSERT INTO customers(name,phone,address,password_hash,created_at) VALUES(?,?,?,?,?) RETURNING id',
                     (name,phone,address,generate_password_hash(password),now())
-                )
-                cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+                ).fetchone()['id']
                 c.commit()
                 c.close()
                 session.clear()
@@ -345,15 +403,15 @@ def place_order():
         flash('Name and phone number are required.','error')
         return redirect(url_for('home'))
 
-    c.execute('''INSERT INTO orders
+    oid = c.execute('''INSERT INTO orders
         (product_id,customer_name,phone,address,qty,unit_price,fulfillment,payment_choice,created_at,customer_id)
-        VALUES(?,?,?,?,?,?,?,?,?,?)''',
+        VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id''',
         (p['id'],name,phone,address,qty,p['sell_price'],
          request.form.get('fulfillment','delivery'),
-         request.form.get('payment_choice','pay_on_delivery'),now(),customer_id))
+         request.form.get('payment_choice','pay_on_delivery'),now(),customer_id)
+    ).fetchone()['id']
 
     c.commit()
-    oid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
     c.close()
     flash('Your order has been placed successfully! Reference #' + str(oid), 'success')
     return render_template('order_done.html',oid=oid)
@@ -439,7 +497,7 @@ def products_page():
         except: price=cost=0
         if not brand or size not in ('6kg','13kg'): flash('Enter a brand and valid cylinder size.','error')
         else:
-            c=db(); c.execute('INSERT INTO products(brand,size,sell_price,buy_cost) VALUES(?,?,?,?) ON CONFLICT(brand,size) DO UPDATE SET sell_price=excluded.sell_price,buy_cost=excluded.buy_cost,active=1',(brand,size,price,cost)); pid=c.execute('SELECT id FROM products WHERE brand=? AND size=?',(brand,size)).fetchone()['id']; c.execute('INSERT OR IGNORE INTO stock(product_id) VALUES(?)',(pid,)); c.commit(); c.close(); audit('product','Added/updated '+brand+' '+size); flash('Product saved.','success'); return redirect(url_for('products_page'))
+            c=db(); c.execute('INSERT INTO products(brand,size,sell_price,buy_cost) VALUES(?,?,?,?) ON CONFLICT(brand,size) DO UPDATE SET sell_price=excluded.sell_price,buy_cost=excluded.buy_cost,active=1',(brand,size,price,cost)); pid=c.execute('SELECT id FROM products WHERE brand=? AND size=?',(brand,size)).fetchone()['id']; c.execute('INSERT INTO stock(product_id) VALUES(?) ON CONFLICT(product_id) DO NOTHING',(pid,)); c.commit(); c.close(); audit('product','Added/updated '+brand+' '+size); flash('Product saved.','success'); return redirect(url_for('products_page'))
     return render_template('products.html',products=get_products())
 @app.route('/products/<int:pid>/image',methods=['POST'])
 @admin_required
@@ -455,7 +513,7 @@ def product_image(pid):
 def inventory():
     if request.method=='POST':
         pid=int(request.form['product_id']); full=int(request.form.get('full_qty',0)); empty=int(request.form.get('empty_qty',0))
-        c=db(); c.execute('UPDATE stock SET full_qty=MAX(0,full_qty+?),empty_qty=MAX(0,empty_qty+?) WHERE product_id=?',(full,empty,pid)); c.commit(); c.close(); audit('stock adjustment',f'Product {pid}: full {full}, empty {empty}'); flash('Stock adjusted.','success'); return redirect(url_for('inventory'))
+        c=db(); c.execute('UPDATE stock SET full_qty=GREATEST(0,full_qty+?),empty_qty=GREATEST(0,empty_qty+?) WHERE product_id=?',(full,empty,pid)); c.commit(); c.close(); audit('stock adjustment',f'Product {pid}: full {full}, empty {empty}'); flash('Stock adjusted.','success'); return redirect(url_for('inventory'))
     c=db()
     products=c.execute('SELECT p.id,p.brand,p.size,COALESCE(s.full_qty,0) full_qty,COALESCE(s.empty_qty,0) empty_qty FROM products p LEFT JOIN stock s ON s.product_id=p.id ORDER BY p.brand,p.size').fetchall()
     c.close()
@@ -471,8 +529,9 @@ def sales():
         elif paid<0 or paid>price*qty: flash('Amount paid must be between zero and the sale total.','error')
         elif paid<price*qty and not cid: flash('Select a registered customer for a credit balance.','error')
         else:
-            total=money(price*qty); c.execute('INSERT INTO sales(product_id,customer_id,qty,unit_price,unit_cost,total,paid,payment_method,sale_date,user_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(pid,cid,qty,price,p['buy_cost'],total,paid,method,now(),session['uid']))
-            sid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.execute('UPDATE stock SET full_qty=full_qty-?,empty_qty=empty_qty+? WHERE product_id=?',(qty,qty,pid))
+            total=money(price*qty)
+            sid=c.execute('INSERT INTO sales(product_id,customer_id,qty,unit_price,unit_cost,total,paid,payment_method,sale_date,user_id) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id',(pid,cid,qty,price,p['buy_cost'],total,paid,method,now(),session['uid'])).fetchone()['id']
+            c.execute('UPDATE stock SET full_qty=full_qty-?,empty_qty=empty_qty+? WHERE product_id=?',(qty,qty,pid))
             if paid<total: c.execute('INSERT INTO debts(customer_id,sale_id,original,due_date,issued_at,created_by) VALUES(?,?,?,?,?,?)',(cid,sid,total-paid,request.form.get('due_date') or today(),now(),session['uid']))
             c.commit(); audit('sale',f'Sale #{sid}, total KSh {total}'); flash('Sale recorded and stock updated.','success'); c.close(); return redirect(url_for('sales'))
     products=c.execute('SELECT p.id,p.brand,p.size,COALESCE(st.full_qty,0) full_qty FROM products p LEFT JOIN stock st ON st.product_id=p.id ORDER BY p.brand,p.size').fetchall(); customers=c.execute('SELECT id,name,phone FROM customers ORDER BY name').fetchall(); rows=c.execute('SELECT s.sale_date,s.qty,s.total,s.paid,s.payment_method,p.brand,p.size,cu.name customer FROM sales s JOIN products p ON p.id=s.product_id LEFT JOIN customers cu ON cu.id=s.customer_id ORDER BY s.id DESC LIMIT 50').fetchall()
@@ -560,12 +619,11 @@ def update_order(oid):
             c.execute('UPDATE stock SET full_qty=full_qty-?,empty_qty=empty_qty+? WHERE product_id=?',(o['qty'],o['qty'],o['product_id']))
             customer=c.execute('SELECT id FROM customers WHERE phone=?',(o['phone'],)).fetchone()
             if not customer:
-                c.execute('INSERT INTO customers(name,phone,address,created_at) VALUES(?,?,?,?)',(o['customer_name'],o['phone'],o['address'],now())); cid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+                cid=c.execute('INSERT INTO customers(name,phone,address,created_at) VALUES(?,?,?,?) RETURNING id',(o['customer_name'],o['phone'],o['address'],now())).fetchone()['id']
             else: cid=customer['id']
             paid=money(o['unit_price']*o['qty']) if pay=='verified' else 0
             prod=c.execute('SELECT buy_cost FROM products WHERE id=?',(o['product_id'],)).fetchone()
-            c.execute('INSERT INTO sales(product_id,customer_id,qty,unit_price,unit_cost,total,paid,payment_method,sale_date,user_id,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(o['product_id'],cid,o['qty'],o['unit_price'],prod['buy_cost'],money(o['unit_price']*o['qty']),paid,'order',now(),session['uid'],'Customer order #'+str(oid)))
-            sid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+            sid=c.execute('INSERT INTO sales(product_id,customer_id,qty,unit_price,unit_cost,total,paid,payment_method,sale_date,user_id,note) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id',(o['product_id'],cid,o['qty'],o['unit_price'],prod['buy_cost'],money(o['unit_price']*o['qty']),paid,'order',now(),session['uid'],'Customer order #'+str(oid))).fetchone()['id']
             if pay=='pledged': c.execute('INSERT INTO debts(customer_id,sale_id,original,due_date,issued_at,created_by,note) VALUES(?,?,?,?,?,?,?)',(cid,sid,money(o['unit_price']*o['qty']),today(),now(),session['uid'],'Order pledge #'+str(oid)))
             c.execute('UPDATE orders SET payment_status=?,order_status=?,handled_by=?,delivered_by=?,delivery_note=? WHERE id=?',(pay,status,session['uid'],session['uid'],request.form.get('delivery_note',''),oid)); c.commit(); c.close(); flash('Delivery completed; sale and stock have been updated.','success'); return redirect(url_for('orders'))
     else:
@@ -575,8 +633,8 @@ def update_order(oid):
 @admin_required
 def reports():
     start=request.args.get('start',today()); end=request.args.get('end',today())
-    c=db(); rows=c.execute('SELECT p.brand,p.size,SUM(s.qty) qty,SUM(s.total) sales,SUM((s.unit_price-s.unit_cost)*s.qty) profit FROM sales s JOIN products p ON p.id=s.product_id WHERE date(s.sale_date) BETWEEN ? AND ? GROUP BY p.id ORDER BY sales DESC',(start,end)).fetchall()
-    total=c.execute('SELECT COALESCE(SUM(total),0) sales,COALESCE(SUM(paid),0) collected,COALESCE(SUM((unit_price-unit_cost)*qty),0) gross_profit FROM sales WHERE date(sale_date) BETWEEN ? AND ?',(start,end)).fetchone()['sales']; collected=c.execute('SELECT COALESCE(SUM(paid),0) n FROM sales WHERE date(sale_date) BETWEEN ? AND ?',(start,end)).fetchone()['n']; gp=c.execute('SELECT COALESCE(SUM((unit_price-unit_cost)*qty),0) n FROM sales WHERE date(sale_date) BETWEEN ? AND ?',(start,end)).fetchone()['n']; exp=c.execute('SELECT COALESCE(SUM(amount),0) n FROM expenses WHERE expense_date BETWEEN ? AND ?',(start,end)).fetchone()['n']; stock=c.execute('SELECT COALESCE(SUM(full_qty),0) fulls,COALESCE(SUM(empty_qty),0) empties FROM stock').fetchone(); c.close()
+    c=db(); rows=c.execute('SELECT p.brand,p.size,SUM(s.qty) qty,SUM(s.total) sales,SUM((s.unit_price-s.unit_cost)*s.qty) profit FROM sales s JOIN products p ON p.id=s.product_id WHERE CAST(s.sale_date AS DATE) BETWEEN ? AND ? GROUP BY p.id ORDER BY sales DESC',(start,end)).fetchall()
+    total=c.execute('SELECT COALESCE(SUM(total),0) sales,COALESCE(SUM(paid),0) collected,COALESCE(SUM((unit_price-unit_cost)*qty),0) gross_profit FROM sales WHERE CAST(sale_date AS DATE) BETWEEN ? AND ?',(start,end)).fetchone()['sales']; collected=c.execute('SELECT COALESCE(SUM(paid),0) n FROM sales WHERE CAST(sale_date AS DATE) BETWEEN ? AND ?',(start,end)).fetchone()['n']; gp=c.execute('SELECT COALESCE(SUM((unit_price-unit_cost)*qty),0) n FROM sales WHERE CAST(sale_date AS DATE) BETWEEN ? AND ?',(start,end)).fetchone()['n']; exp=c.execute('SELECT COALESCE(SUM(amount),0) n FROM expenses WHERE expense_date BETWEEN ? AND ?',(start,end)).fetchone()['n']; stock=c.execute('SELECT COALESCE(SUM(full_qty),0) fulls,COALESCE(SUM(empty_qty),0) empties FROM stock').fetchone(); c.close()
     return render_template('reports.html',start=start,end=end,rows=rows,total=total,collected=collected,gp=gp,expenses=exp,net=money(gp-exp),stock=stock)
 @app.route('/team',methods=['GET','POST'])
 @admin_required
@@ -587,7 +645,9 @@ def team():
         if len(password)<8: flash('Password must be at least 8 characters.','error')
         else:
             try: c.execute('INSERT INTO users(username,password_hash,role,created_at) VALUES(?,?,?,?)',(username,generate_password_hash(password),'employee',now())); c.commit(); flash('Employee account created.','success')
-            except sqlite3.IntegrityError: flash('That username already exists.','error')
+            except DB_INTEGRITY_ERROR:
+                c.rollback()
+                flash('That username already exists.','error')
     rows=c.execute('SELECT id,username,role,active,created_at FROM users ORDER BY id').fetchall(); c.close(); return render_template('team.html',users=rows)
 @app.route('/team/<int:uid>/toggle',methods=['POST'])
 @admin_required
