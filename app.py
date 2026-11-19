@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, abort
+from flask import Response, Flask, render_template, request, redirect, url_for, session, flash, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
@@ -755,7 +755,41 @@ def deposits():
 
 
 @app.errorhandler(403)
-def forbidden(e): return render_template('message.html',heading='Access restricted',message='This section is available to the administrator only.'),403
+
+def forbidden(e):
+    return render_template(
+        'message.html',
+        heading='Access restricted',
+        message='This section is available to the administrator only.'
+    ), 403
+
+@app.route('/robots.txt')
+def robots_txt():
+    return Response(
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Sitemap: https://lavonne-gas-new.onrender.com/sitemap.xml\n",
+        mimetype='text/plain'
+    )
+
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    urls = [
+        url_for('inventory', _external=True),
+        url_for('login', _external=True),
+        url_for('customer_login', _external=True),
+        url_for('customer_register', _external=True),
+    ]
+
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+
+    for u in urls:
+        xml += f'  <url><loc>{u}</loc></url>\n'
+
+    xml += '</urlset>'
+    return Response(xml, mimetype='application/xml')
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
