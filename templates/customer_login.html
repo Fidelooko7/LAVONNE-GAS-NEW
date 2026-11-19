@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="auth-card">
+  <h1>Customer Login</h1>
+  <p>Login to manage your Lavonne Gas orders and account.</p>
+
+  <form method="post">
+    <label>Phone Number</label>
+    <input type="tel" name="phone" required placeholder="07XXXXXXXX">
+
+    <label>Password</label>
+    <input type="password" name="password" required>
+
+    <button type="submit" class="button">Login</button>
+  </form>
+
+  <p class="auth-link">
+    Don't have an account?
+    <a href="{{ url_for('customer_register') }}">Create an account</a>
+  </p>
+</div>
+{% endblock %}

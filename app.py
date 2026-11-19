@@ -16,6 +16,7 @@ SECRET_FILE = DB.parent / 'secret_key'
 if not SECRET_FILE.exists():
     SECRET_FILE.write_text(secrets.token_urlsafe(48))
 app.secret_key = os.environ.get('LAVONNE_SECRET') or SECRET_FILE.read_text().strip()
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 ALLOWED = {'png','jpg','jpeg','webp'}
 
@@ -23,13 +24,13 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','employee')), active INTEGER DEFAULT 1, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, brand TEXT NOT NULL, size TEXT NOT NULL, sell_price REAL NOT NULL DEFAULT 0, buy_cost REAL NOT NULL DEFAULT 0, image TEXT, active INTEGER DEFAULT 1, UNIQUE(brand,size));
 CREATE TABLE IF NOT EXISTS stock(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL UNIQUE REFERENCES products(id), full_qty INTEGER NOT NULL DEFAULT 0, empty_qty INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT DEFAULT '', created_at TEXT NOT NULL, password_hash TEXT DEFAULT '', profile_image TEXT DEFAULT '', active INTEGER DEFAULT 1, last_login TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS sales(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), customer_id INTEGER REFERENCES customers(id), qty INTEGER NOT NULL, unit_price REAL NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL, paid REAL NOT NULL, payment_method TEXT NOT NULL, sale_date TEXT NOT NULL, user_id INTEGER REFERENCES users(id), note TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS debts(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), sale_id INTEGER REFERENCES sales(id), original REAL NOT NULL, due_date TEXT NOT NULL, issued_at TEXT NOT NULL, note TEXT DEFAULT '', created_by INTEGER REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS debt_payments(id INTEGER PRIMARY KEY, debt_id INTEGER NOT NULL REFERENCES debts(id), amount REAL NOT NULL, method TEXT NOT NULL, paid_at TEXT NOT NULL, recorded_by INTEGER REFERENCES users(id), note TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), qty INTEGER NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL, purchase_date TEXT NOT NULL, supplier TEXT DEFAULT '', user_id INTEGER REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL, expense_date TEXT NOT NULL, note TEXT DEFAULT '', user_id INTEGER REFERENCES users(id));
-CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), customer_name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT DEFAULT '', qty INTEGER NOT NULL, unit_price REAL NOT NULL, fulfillment TEXT NOT NULL, payment_choice TEXT NOT NULL, payment_status TEXT NOT NULL DEFAULT 'unverified', order_status TEXT NOT NULL DEFAULT 'new', created_at TEXT NOT NULL, handled_by INTEGER REFERENCES users(id), delivered_by INTEGER REFERENCES users(id), delivery_note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), customer_name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT DEFAULT '', qty INTEGER NOT NULL, unit_price REAL NOT NULL, fulfillment TEXT NOT NULL, payment_choice TEXT NOT NULL, payment_status TEXT NOT NULL DEFAULT 'unverified', order_status TEXT NOT NULL DEFAULT 'new', created_at TEXT NOT NULL, handled_by INTEGER REFERENCES users(id), delivered_by INTEGER REFERENCES users(id), delivery_note TEXT DEFAULT '', customer_id INTEGER REFERENCES customers(id));
 CREATE TABLE IF NOT EXISTS news(id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, image TEXT, tag TEXT DEFAULT 'Info', important INTEGER DEFAULT 0, created_at TEXT NOT NULL, created_by INTEGER REFERENCES users(id), active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS stock_confirmations(id INTEGER PRIMARY KEY, confirm_date TEXT NOT NULL, product_id INTEGER NOT NULL REFERENCES products(id), full_qty INTEGER NOT NULL, empty_qty INTEGER NOT NULL, confirmed_by INTEGER REFERENCES users(id), admin_confirmed INTEGER DEFAULT 0, admin_id INTEGER REFERENCES users(id), note TEXT DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cylinder_deposits(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), product_id INTEGER REFERENCES products(id), qty INTEGER NOT NULL DEFAULT 1, deposit_amount REAL DEFAULT 0, status TEXT NOT NULL DEFAULT 'outstanding', issued_at TEXT NOT NULL, returned_at TEXT, note TEXT DEFAULT '', created_by INTEGER REFERENCES users(id));
@@ -40,7 +41,13 @@ def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
 
 def init_db():
-    c=db(); c.executescript(SCHEMA); c.commit(); c.close()
+    c=db()
+    c.executescript(SCHEMA)
+    columns = [r['name'] for r in c.execute('PRAGMA table_info(orders)').fetchall()]
+    if 'customer_id' not in columns:
+        c.execute('ALTER TABLE orders ADD COLUMN customer_id INTEGER REFERENCES customers(id)')
+    c.commit()
+    c.close()
 init_db()
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -51,7 +58,7 @@ def audit(action, details):
         c=db(); c.execute('INSERT INTO audit(user_id,action,details,created_at) VALUES(?,?,?,?)',(session['uid'],action,details,now())); c.commit(); c.close()
 def current_user():
     if not session.get('uid'): return None
-    c=db(); u=c.execute('SELECT * FROM users WHERE id=? AND active=1',(session['uid'],)).fetchone(); c.close(); return u
+    c=db(); u=c.execute('SELECT id,username,role FROM users WHERE id=? AND active=1',(session['uid'],)).fetchone(); c.close(); return u
 @app.context_processor
 def inject():
     return {'me':current_user(),'today':today(),'money':lambda x:f'{money(x):,.2f}'}
@@ -80,16 +87,276 @@ def balance(c, debt_id):
 def home():
     products=get_products(True)
     c=db(); news=c.execute("SELECT * FROM news WHERE active=1 ORDER BY important DESC, id DESC LIMIT 6").fetchall(); c.close(); return render_template("store.html",products=products,news=news)
+
+@app.route('/customer/register', methods=['GET','POST'])
+def customer_register():
+    if request.method == 'POST':
+        name = request.form.get('name','').strip()
+        phone = request.form.get('phone','').strip()
+        address = request.form.get('address','').strip()
+        password = request.form.get('password','')
+        confirm = request.form.get('confirm_password','')
+
+        if not name or not phone or not password:
+            flash('Name, phone number and password are required.','error')
+        elif len(password) < 8:
+            flash('Password must contain at least 8 characters.','error')
+        elif password != confirm:
+            flash('Passwords do not match.','error')
+        else:
+            c = db()
+            existing = c.execute(
+                'SELECT * FROM customers WHERE phone=? ORDER BY id LIMIT 1',
+                (phone,)
+            ).fetchone()
+
+            if existing and existing['password_hash']:
+                c.close()
+                flash('An account already exists. Please log in.','error')
+            elif existing:
+                c.execute(
+                    'UPDATE customers SET name=?,address=?,password_hash=?,active=1 WHERE id=?',
+                    (name,address,generate_password_hash(password),existing['id'])
+                )
+                cid = existing['id']
+                c.commit()
+                c.close()
+                session.clear()
+                session['customer_id'] = cid
+                session.permanent = True
+                return redirect(url_for('customer_dashboard'))
+            else:
+                c.execute(
+                    'INSERT INTO customers(name,phone,address,password_hash,created_at) VALUES(?,?,?,?,?)',
+                    (name,phone,address,generate_password_hash(password),now())
+                )
+                cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+                c.commit()
+                c.close()
+                session.clear()
+                session['customer_id'] = cid
+                session.permanent = True
+                return redirect(url_for('customer_dashboard'))
+
+    return render_template('customer_register.html')
+
+
+@app.route('/customer/login', methods=['GET','POST'])
+def customer_login():
+    if request.method == 'POST':
+        phone = request.form.get('phone','').strip()
+        password = request.form.get('password','')
+        c = db()
+        customer = c.execute(
+            'SELECT * FROM customers WHERE phone=? AND active=1 ORDER BY id LIMIT 1',
+            (phone,)
+        ).fetchone()
+
+        if customer and customer['password_hash'] and check_password_hash(customer['password_hash'],password):
+            c.execute('UPDATE customers SET last_login=? WHERE id=?',(now(),customer['id']))
+            c.commit()
+            cid = customer['id']
+            c.close()
+            session.clear()
+            session['customer_id'] = cid
+            session.permanent = True
+            return redirect(url_for('customer_dashboard'))
+
+        c.close()
+        flash('Incorrect phone number or password.','error')
+
+    return render_template('customer_login.html')
+
+
+@app.route('/customer/logout')
+def customer_logout():
+    session.pop('customer_id',None)
+    return redirect(url_for('customer_login'))
+
+
+@app.route('/customer/dashboard')
+def customer_dashboard():
+    cid = session.get('customer_id')
+    if not cid:
+        return redirect(url_for('customer_login'))
+
+    c = db()
+    customer = c.execute(
+        'SELECT * FROM customers WHERE id=? AND active=1',(cid,)
+    ).fetchone()
+
+    if not customer:
+        c.close()
+        session.pop('customer_id',None)
+        return redirect(url_for('customer_login'))
+
+    debt = c.execute("""
+        SELECT COALESCE(SUM(d.original),0) -
+        COALESCE((SELECT SUM(dp.amount)
+                  FROM debt_payments dp
+                  JOIN debts dx ON dx.id=dp.debt_id
+                  WHERE dx.customer_id=?),0) AS balance
+        FROM debts d WHERE d.customer_id=?
+    """,(cid,cid)).fetchone()
+
+    orders = c.execute("""
+        SELECT o.*,p.brand,p.size
+        FROM orders o JOIN products p ON p.id=o.product_id
+        WHERE o.customer_id=?
+        ORDER BY o.id DESC
+    """,(cid,)).fetchall()
+
+    payments = c.execute("""
+        SELECT dp.* FROM debt_payments dp
+        JOIN debts d ON d.id=dp.debt_id
+        WHERE d.customer_id=?
+        ORDER BY dp.id DESC
+    """,(cid,)).fetchall()
+
+    c.close()
+    return render_template(
+        'customer_dashboard.html',
+        customer=customer,
+        balance=debt['balance'] if debt else 0,
+        recent_orders=orders,
+        payments=payments
+    )
+
+
+@app.route('/customer/credentials', methods=['GET', 'POST'])
+def customer_credentials():
+    cid = session.get('customer_id')
+    if not cid:
+        return redirect(url_for('customer_login'))
+
+    c = db()
+    customer = c.execute(
+        'SELECT * FROM customers WHERE id=? AND active=1', (cid,)
+    ).fetchone()
+
+    if not customer:
+        c.close()
+        session.pop('customer_id', None)
+        return redirect(url_for('customer_login'))
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        phone = request.form.get('phone', '').strip()
+        address = request.form.get('address', '').strip()
+
+        if not name or not phone:
+            flash('Name and phone number are required.', 'error')
+        else:
+            duplicate = c.execute(
+                'SELECT id FROM customers WHERE phone=? AND id<>? LIMIT 1',
+                (phone, cid)
+            ).fetchone()
+
+            if duplicate:
+                flash('That phone number is already registered to another account.', 'error')
+            else:
+                c.execute(
+                    'UPDATE customers SET name=?, phone=?, address=? WHERE id=?',
+                    (name, phone, address, cid)
+                )
+                c.commit()
+                flash('Your credentials have been updated.', 'success')
+                customer = c.execute(
+                    'SELECT * FROM customers WHERE id=?', (cid,)
+                ).fetchone()
+
+    c.close()
+    return render_template('customer_credentials.html', customer=customer)
+
+
+@app.route('/customer/change-password', methods=['GET', 'POST'])
+def customer_change_password():
+    cid = session.get('customer_id')
+    if not cid:
+        return redirect(url_for('customer_login'))
+
+    c = db()
+    customer = c.execute(
+        'SELECT * FROM customers WHERE id=? AND active=1', (cid,)
+    ).fetchone()
+
+    if not customer:
+        c.close()
+        session.pop('customer_id', None)
+        return redirect(url_for('customer_login'))
+
+    if request.method == 'POST':
+        current = request.form.get('current_password', '')
+        new = request.form.get('new_password', '')
+        confirm = request.form.get('confirm_password', '')
+
+        if not check_password_hash(customer['password_hash'], current):
+            flash('Your current password is incorrect.', 'error')
+        elif len(new) < 8:
+            flash('Your new password must contain at least 8 characters.', 'error')
+        elif new != confirm:
+            flash('The new passwords do not match.', 'error')
+        else:
+            c.execute(
+                'UPDATE customers SET password_hash=? WHERE id=?',
+                (generate_password_hash(new), cid)
+            )
+            c.commit()
+            flash('Your password has been changed successfully.', 'success')
+
+    c.close()
+    return render_template('customer_change_password.html')
+
+
 @app.route('/order',methods=['POST'])
 def place_order():
-    c=db(); p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(request.form.get('product_id'),)).fetchone()
+    c=db()
+    p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(request.form.get('product_id'),)).fetchone()
     try: qty=max(1,int(request.form.get('qty','1')))
     except: qty=1
-    if not p: flash('Please select an available product.','error'); return redirect(url_for('home'))
-    name=request.form.get('name','').strip(); phone=request.form.get('phone','').strip()
-    if not name or not phone: flash('Name and phone number are required.','error'); return redirect(url_for('home'))
-    c.execute('INSERT INTO orders(product_id,customer_name,phone,address,qty,unit_price,fulfillment,payment_choice,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(p['id'],name,phone,request.form.get('address','').strip(),qty,p['sell_price'],request.form.get('fulfillment','delivery'),request.form.get('payment_choice','pay_on_delivery'),now()))
-    c.commit(); oid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.close(); return render_template('order_done.html',oid=oid)
+
+    if not p:
+        c.close()
+        flash('Please select an available product.','error')
+        return redirect(url_for('home'))
+
+    customer_id=session.get('customer_id')
+    customer=None
+
+    if customer_id:
+        customer=c.execute('SELECT * FROM customers WHERE id=? AND active=1',(customer_id,)).fetchone()
+        if not customer:
+            session.pop('customer_id',None)
+            customer_id=None
+
+    if customer:
+        name=customer['name']
+        phone=customer['phone']
+        address=customer['address'] or request.form.get('address','').strip()
+        customer_id=customer['id']
+    else:
+        customer_id=None
+        name=request.form.get('name','').strip()
+        phone=request.form.get('phone','').strip()
+        address=request.form.get('address','').strip()
+
+    if not name or not phone:
+        c.close()
+        flash('Name and phone number are required.','error')
+        return redirect(url_for('home'))
+
+    c.execute('''INSERT INTO orders
+        (product_id,customer_name,phone,address,qty,unit_price,fulfillment,payment_choice,created_at,customer_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?)''',
+        (p['id'],name,phone,address,qty,p['sell_price'],
+         request.form.get('fulfillment','delivery'),
+         request.form.get('payment_choice','pay_on_delivery'),now(),customer_id))
+
+    c.commit()
+    oid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    c.close()
+    flash('Your order has been placed successfully! Reference #' + str(oid), 'success')
+    return render_template('order_done.html',oid=oid)
 @app.route('/setup',methods=['GET','POST'])
 def setup():
     c=db(); exists=c.execute('SELECT COUNT(*) n FROM users').fetchone()['n']; c.close()
@@ -159,7 +426,7 @@ def dashboard():
     expenses=c.execute('SELECT COALESCE(SUM(amount),0) total FROM expenses WHERE expense_date=?',(selected,)).fetchone()['total']
     stock=c.execute('SELECT COALESCE(SUM(full_qty),0) fulls,COALESCE(SUM(empty_qty),0) empties FROM stock').fetchone()
     debt=c.execute('SELECT COALESCE(SUM(d.original-COALESCE(p.paid,0)),0) bal FROM debts d LEFT JOIN (SELECT debt_id,SUM(amount) paid FROM debt_payments GROUP BY debt_id) p ON p.debt_id=d.id').fetchone()['bal']
-    recent=c.execute('SELECT s.*,p.brand,p.size FROM sales s JOIN products p ON p.id=s.product_id ORDER BY s.id DESC LIMIT 7').fetchall()
+    recent=c.execute('SELECT s.paid,s.qty,s.total,p.brand,p.size FROM sales s JOIN products p ON p.id=s.product_id ORDER BY s.id DESC LIMIT 7').fetchall()
     orders=c.execute("SELECT COUNT(*) n FROM orders WHERE order_status IN ('new','awaiting_payment','authorised','out_for_delivery')").fetchone()['n']
     low_stock=c.execute('SELECT p.brand,p.size,s.full_qty FROM stock s JOIN products p ON p.id=s.product_id WHERE s.full_qty <= 5 AND p.active=1 ORDER BY s.full_qty').fetchall()
     c.close(); gp=money(sales['gross_profit']); return render_template('dashboard.html',selected=selected,sales=sales,expenses=expenses,net=gp-money(expenses),stock=stock,debt=debt,recent=recent,orders=orders,low_stock=low_stock)
@@ -189,7 +456,10 @@ def inventory():
     if request.method=='POST':
         pid=int(request.form['product_id']); full=int(request.form.get('full_qty',0)); empty=int(request.form.get('empty_qty',0))
         c=db(); c.execute('UPDATE stock SET full_qty=MAX(0,full_qty+?),empty_qty=MAX(0,empty_qty+?) WHERE product_id=?',(full,empty,pid)); c.commit(); c.close(); audit('stock adjustment',f'Product {pid}: full {full}, empty {empty}'); flash('Stock adjusted.','success'); return redirect(url_for('inventory'))
-    return render_template('inventory.html',products=get_products())
+    c=db()
+    products=c.execute('SELECT p.id,p.brand,p.size,COALESCE(s.full_qty,0) full_qty,COALESCE(s.empty_qty,0) empty_qty FROM products p LEFT JOIN stock s ON s.product_id=p.id ORDER BY p.brand,p.size').fetchall()
+    c.close()
+    return render_template('inventory.html',products=products)
 @app.route('/sales',methods=['GET','POST'])
 @login_required
 def sales():
@@ -205,7 +475,7 @@ def sales():
             sid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.execute('UPDATE stock SET full_qty=full_qty-?,empty_qty=empty_qty+? WHERE product_id=?',(qty,qty,pid))
             if paid<total: c.execute('INSERT INTO debts(customer_id,sale_id,original,due_date,issued_at,created_by) VALUES(?,?,?,?,?,?)',(cid,sid,total-paid,request.form.get('due_date') or today(),now(),session['uid']))
             c.commit(); audit('sale',f'Sale #{sid}, total KSh {total}'); flash('Sale recorded and stock updated.','success'); c.close(); return redirect(url_for('sales'))
-    products=get_products(); customers=c.execute('SELECT * FROM customers ORDER BY name').fetchall(); rows=c.execute('SELECT s.*,p.brand,p.size,cu.name customer FROM sales s JOIN products p ON p.id=s.product_id LEFT JOIN customers cu ON cu.id=s.customer_id ORDER BY s.id DESC LIMIT 50').fetchall()
+    products=c.execute('SELECT p.id,p.brand,p.size,COALESCE(st.full_qty,0) full_qty FROM products p LEFT JOIN stock st ON st.product_id=p.id ORDER BY p.brand,p.size').fetchall(); customers=c.execute('SELECT id,name,phone FROM customers ORDER BY name').fetchall(); rows=c.execute('SELECT s.sale_date,s.qty,s.total,s.paid,s.payment_method,p.brand,p.size,cu.name customer FROM sales s JOIN products p ON p.id=s.product_id LEFT JOIN customers cu ON cu.id=s.customer_id ORDER BY s.id DESC LIMIT 50').fetchall()
     # Weekday sales summary (current week)
     from datetime import timedelta as td
     today_d = date.today()
@@ -237,11 +507,11 @@ def customers():
     c=db()
     if request.method=='POST':
         c.execute('INSERT INTO customers(name,phone,address,created_at) VALUES(?,?,?,?)',(request.form['name'].strip(),request.form['phone'].strip(),request.form.get('address',''),now())); c.commit(); flash('Customer added.','success'); c.close(); return redirect(url_for('customers'))
-    rows=c.execute('SELECT cu.*,COALESCE(SUM(d.original),0)-COALESCE((SELECT SUM(dp.amount) FROM debt_payments dp JOIN debts dx ON dx.id=dp.debt_id WHERE dx.customer_id=cu.id),0) balance FROM customers cu LEFT JOIN debts d ON d.customer_id=cu.id GROUP BY cu.id ORDER BY cu.name').fetchall(); c.close(); return render_template('customers.html',customers=rows)
+    rows=c.execute('SELECT cu.id,cu.name,cu.phone,cu.address,COALESCE(SUM(d.original),0)-COALESCE((SELECT SUM(dp.amount) FROM debt_payments dp JOIN debts dx ON dx.id=dp.debt_id WHERE dx.customer_id=cu.id),0) balance FROM customers cu LEFT JOIN debts d ON d.customer_id=cu.id GROUP BY cu.id ORDER BY cu.name').fetchall(); c.close(); return render_template('customers.html',customers=rows)
 @app.route('/debts')
 @login_required
 def debts():
-    c=db(); rows=c.execute('SELECT d.*,cu.name,cu.phone,COALESCE(SUM(dp.amount),0) paid FROM debts d JOIN customers cu ON cu.id=d.customer_id LEFT JOIN debt_payments dp ON dp.debt_id=d.id GROUP BY d.id ORDER BY d.due_date').fetchall(); payments=c.execute('SELECT dp.*,cu.name customer,d.id debt_id FROM debt_payments dp JOIN debts d ON d.id=dp.debt_id JOIN customers cu ON cu.id=d.customer_id ORDER BY dp.id DESC LIMIT 100').fetchall(); c.close(); items=[]
+    c=db(); rows=c.execute('SELECT d.id,d.original,d.due_date,d.issued_at,cu.name,cu.phone,COALESCE(SUM(dp.amount),0) paid FROM debts d JOIN customers cu ON cu.id=d.customer_id LEFT JOIN debt_payments dp ON dp.debt_id=d.id GROUP BY d.id ORDER BY d.due_date').fetchall(); payments=c.execute('SELECT dp.amount,dp.method,dp.paid_at,cu.name customer FROM debt_payments dp JOIN debts d ON d.id=dp.debt_id JOIN customers cu ON cu.id=d.customer_id ORDER BY dp.id DESC LIMIT 100').fetchall(); c.close(); items=[]
     for r in rows:
         x=dict(r); x['balance']=money(x['original']-x['paid']); x['status']='PAID' if x['balance']<=0 else ('OVERDUE' if x['due_date']<today() else ('DUE SOON' if x['due_date']<= (date.today()+timedelta(days=3)).isoformat() else 'OPEN')); items.append(x)
     return render_template('debts.html',debts=items,payments=payments)
@@ -260,18 +530,18 @@ def purchases():
     if request.method=='POST':
         pid=int(request.form['product_id']); qty=max(1,int(request.form['qty'])); cost=money(request.form['unit_cost']); d=request.form.get('purchase_date') or today(); total=money(qty*cost)
         c.execute('INSERT INTO purchases(product_id,qty,unit_cost,total,purchase_date,supplier,user_id) VALUES(?,?,?,?,?,?,?)',(pid,qty,cost,total,d,request.form.get('supplier',''),session['uid'])); c.execute('UPDATE stock SET full_qty=full_qty+? WHERE product_id=?',(qty,pid)); c.execute('UPDATE products SET buy_cost=? WHERE id=?',(cost,pid)); c.commit(); c.close(); flash('Purchase saved and stock increased.','success'); return redirect(url_for('purchases'))
-    prods=get_products(); rows=c.execute('SELECT pu.*,p.brand,p.size FROM purchases pu JOIN products p ON p.id=pu.product_id ORDER BY pu.id DESC LIMIT 30').fetchall(); c.close(); return render_template('purchases.html',products=prods,rows=rows)
+    prods=c.execute('SELECT id,brand,size FROM products ORDER BY brand,size').fetchall(); rows=c.execute('SELECT pu.purchase_date,pu.qty,pu.supplier,pu.total,pu.unit_cost,p.brand,p.size FROM purchases pu JOIN products p ON p.id=pu.product_id ORDER BY pu.id DESC LIMIT 30').fetchall(); c.close(); return render_template('purchases.html',products=prods,rows=rows)
 @app.route('/expenses',methods=['GET','POST'])
-@login_required
+@admin_required
 def expenses():
     c=db()
     if request.method=='POST':
         c.execute('INSERT INTO expenses(title,amount,expense_date,note,user_id) VALUES(?,?,?,?,?)',(request.form['title'],money(request.form['amount']),request.form.get('expense_date') or today(),request.form.get('note',''),session['uid'])); c.commit(); c.close(); flash('Expense recorded.','success'); return redirect(url_for('expenses'))
-    rows=c.execute('SELECT * FROM expenses ORDER BY id DESC LIMIT 40').fetchall(); c.close(); return render_template('expenses.html',rows=rows)
+    rows=c.execute('SELECT amount,expense_date,note,title FROM expenses ORDER BY id DESC LIMIT 40').fetchall(); c.close(); return render_template('expenses.html',rows=rows)
 @app.route('/orders')
 @login_required
 def orders():
-    c=db(); rows=c.execute('SELECT o.*,p.brand,p.size FROM orders o JOIN products p ON p.id=o.product_id ORDER BY o.id DESC').fetchall(); c.close(); return render_template('orders.html',rows=rows)
+    c=db(); rows=c.execute('SELECT o.id,o.created_at,o.customer_name,o.phone,o.qty,o.fulfillment,o.unit_price,o.payment_choice,o.payment_status,o.order_status,o.delivery_note,p.brand,p.size FROM orders o JOIN products p ON p.id=o.product_id ORDER BY o.id DESC').fetchall(); c.close(); return render_template('orders.html',rows=rows)
 @app.route('/orders/<int:oid>/update',methods=['POST'])
 @login_required
 def update_order(oid):
@@ -376,7 +646,7 @@ def news_toggle(nid):
 @login_required
 def stock_confirm():
     c = db()
-    products = get_products()
+    products = c.execute('SELECT p.id,p.brand,p.size,COALESCE(s.full_qty,0) full_qty,COALESCE(s.empty_qty,0) empty_qty FROM products p LEFT JOIN stock s ON s.product_id=p.id ORDER BY p.brand,p.size').fetchall()
     if request.method == 'POST':
         confirm_date = request.form.get('confirm_date') or today()
         for p in products:
@@ -416,9 +686,9 @@ def deposits():
             flash('Cylinder marked as returned.','success')
         c.close()
         return redirect(url_for('deposits'))
-    rows = c.execute('SELECT d.*, cu.name, cu.phone, p.brand, p.size FROM cylinder_deposits d JOIN customers cu ON cu.id=d.customer_id LEFT JOIN products p ON p.id=d.product_id ORDER BY d.id DESC LIMIT 50').fetchall()
-    customers = c.execute('SELECT * FROM customers ORDER BY name').fetchall()
-    products = get_products()
+    rows = c.execute('SELECT d.id,d.deposit_amount,d.issued_at,d.qty,d.status,cu.name,cu.phone,p.brand,p.size FROM cylinder_deposits d JOIN customers cu ON cu.id=d.customer_id LEFT JOIN products p ON p.id=d.product_id ORDER BY d.id DESC LIMIT 50').fetchall()
+    customers = c.execute('SELECT id,name,phone FROM customers ORDER BY name').fetchall()
+    products = c.execute('SELECT id,brand,size FROM products ORDER BY brand,size').fetchall()
     outstanding = c.execute("SELECT COUNT(*) n FROM cylinder_deposits WHERE status='outstanding'").fetchone()['n']
     c.close()
     return render_template('deposits.html', rows=rows, customers=customers, products=products, outstanding=outstanding)

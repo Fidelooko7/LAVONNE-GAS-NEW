@@ -33,6 +33,9 @@
       <a href="{{ url_for('home') }}" class="nav-item">
         <i class="fas fa-store"></i> <span>Store</span>
       </a>
+      <a href="{{ url_for('customer_dashboard') }}" class="nav-item">
+        <i class="fas fa-user-circle"></i> <span>My Account</span>
+      </a>
 
       {% if me %}
       <div class="nav-section">Staff Menu</div>
@@ -91,9 +94,7 @@
         <i class="fas fa-right-from-bracket"></i> <span>Sign Out</span>
       </a>
       {% else %}
-      <a href="{{ url_for('login') }}" class="nav-item">
-        <i class="fas fa-lock"></i> <span>Staff Login</span>
-      </a>
+
       {% endif %}
     </nav>
 
@@ -123,7 +124,7 @@
             {{ me.username }} · {{ me.role|title }}
           </span>
         {% else %}
-          <a href="{{ url_for('login') }}" class="login-link">Staff Login</a>
+
         {% endif %}
       </div>
     </header>
@@ -131,9 +132,16 @@
     <!-- PAGE CONTENT -->
     <main class="content">
       {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, message in messages %}
-          <div class="flash {{ category }}">{{ message }}</div>
-        {% endfor %}
+        {% if messages %}
+          <div class="toast-container" aria-live="polite">
+            {% for category, message in messages %}
+              <div class="flash toast {{ category }}">
+                <span>{{ message }}</span>
+                <button type="button" class="toast-close" aria-label="Close" onclick="this.parentElement.remove()">×</button>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
       {% endwith %}
 
       {% block content %}{% endblock %}
@@ -157,6 +165,18 @@
     </footer>
   </div>
 
+  <!-- CUSTOMER MOBILE BOTTOM NAVIGATION -->
+  <nav class="customer-bottom-nav" aria-label="Customer navigation">
+    <a href="{{ url_for('home') }}">
+      <i class="fas fa-store"></i>
+      <span>Store</span>
+    </a>
+    <a href="{{ url_for('customer_dashboard') }}">
+      <i class="fas fa-user-circle"></i>
+      <span>Account</span>
+    </a>
+  </nav>
+
   <!-- Floating WhatsApp Button -->
   <a href="https://wa.me/254714524590" class="whatsapp-float" target="_blank" rel="noopener" title="Chat on WhatsApp">
     <i class="fab fa-whatsapp"></i>
@@ -169,5 +189,14 @@
       document.body.classList.toggle('sidebar-open');
     }
   </script>
-</body>
+
+<script>
+document.querySelectorAll('.toast').forEach(function(toast) {
+  setTimeout(function() {
+    toast.classList.add('toast-hide');
+    setTimeout(function() { toast.remove(); }, 350);
+  }, 5000);
+});
+</script>
+\n</body>
 </html>
