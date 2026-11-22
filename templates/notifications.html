@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Notifications</h1>
+    <p class="muted">
+      {{ unread }} unread · {{ unattended }} unattended
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  {% if notifications %}
+    <div class="notification-list">
+      {% for n in notifications %}
+        <div class="notification-item {% if not n['is_read'] %}notification-unread{% endif %} {% if not n['is_attended'] %}notification-unattended{% endif %}">
+          <div class="notification-main">
+            <div class="notification-title">
+              {{ n['title'] }}
+              {% if not n['is_attended'] %}
+                <span class="notification-badge">PENDING</span>
+              {% endif %}
+            </div>
+
+            <div class="notification-message">
+              {{ n['message'] }}
+            </div>
+
+            <div class="notification-meta">
+              {{ n['created_at'] }}
+              · {{ n['notification_type']|replace('_',' ')|title }}
+            </div>
+          </div>
+
+          <div class="notification-actions">
+            {% if not n['is_read'] %}
+              <form method="post" action="{{ url_for('notification_read', nid=n['id']) }}">
+                <button type="submit" class="btn btn-secondary">
+                  Mark read
+                </button>
+              </form>
+            {% endif %}
+
+            {% if not n['is_attended'] %}
+              <form method="post" action="{{ url_for('notification_attend', nid=n['id']) }}">
+                <button type="submit" class="btn btn-primary">
+                  Attend
+                </button>
+              </form>
+            {% else %}
+              <span class="notification-attended">Attended</span>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <h3>No notifications</h3>
+      <p>You are all caught up.</p>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
