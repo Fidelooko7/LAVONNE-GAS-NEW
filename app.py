@@ -198,8 +198,8 @@ def send_fcm_push(token, title, message, notification_id):
         messaging.send(push, app=_firebase_app)
         return True
 
-    except Exception:
-        logging.exception("FCM push delivery failed.")
+    except Exception as e:
+        logging.exception("FCM push delivery failed: %s", e)
         return False
 
 
