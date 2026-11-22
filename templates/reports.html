@@ -1,1 +1,61 @@
-{% extends 'base.html' %}{% block content %}<div class="page-title"><div><p class="eyebrow">PERFORMANCE ANALYTICS</p><h1>Business reports</h1><p class="muted">Choose a date range. All values are calculated from recorded transactions.</p></div><form class="date-filter"><label>From<input type="date" name="start" value="{{start}}"></label><label>To<input type="date" name="end" value="{{end}}"></label><button>Apply</button></form></div><div class="metric-grid"><div class="metric"><span>Total sales</span><strong>KSh {{money(total)}}</strong></div><div class="metric"><span>Payments collected</span><strong>KSh {{money(collected)}}</strong></div>{% if me.role=='admin' %}<div class="metric"><span>Gross profit</span><strong>KSh {{money(gp)}}</strong></div><div class="metric"><span>Expenses</span><strong>KSh {{money(expenses)}}</strong></div><div class="metric"><span>Net profit</span><strong>KSh {{money(net)}}</strong></div>{% endif %}<div class="metric"><span>Current full stock</span><strong>{{stock.fulls}}</strong><small>{{stock.empties}} empties</small></div></div><section class="panel"><h2>Sales by product</h2><div class="table-wrap"><table><tr><th>Product</th><th>Units sold</th><th>Sales</th>{% if me.role=='admin' %}<th>Gross profit</th>{% endif %}</tr>{% for r in rows %}<tr><td>{{r.brand}} {{r.size}}</td><td>{{r.qty}}</td><td>KSh {{money(r.sales)}}</td>{% if me.role=='admin' %}<td>KSh {{money(r.profit)}}</td>{% endif %}</tr>{% endfor %}</table></div></section>{% endblock %}
+{% extends 'base.html' %}
+{% block content %}
+<div class="page-title">
+<div><p class="eyebrow">PERFORMANCE ANALYTICS</p>
+<h1>Business reports</h1>
+<p class="muted">Daily sales, inventory and profit.</p></div>
+<form class="date-filter">
+<label>From<input type="date" name="start" value="{{start}}"></label>
+<label>To<input type="date" name="end" value="{{end}}"></label>
+<button>Apply</button>
+</form>
+</div>
+
+<div class="metric-grid">
+<div class="metric"><span>Total sales</span><strong>KSh {{money(total)}}</strong></div>
+<div class="metric"><span>Collected</span><strong>KSh {{money(collected)}}</strong></div>
+<div class="metric"><span>6kg sold</span><strong>{{total_6kg}}</strong></div>
+<div class="metric"><span>13kg sold</span><strong>{{total_13kg}}</strong></div>
+<div class="metric"><span>Gross profit</span><strong>KSh {{money(gp)}}</strong></div>
+<div class="metric"><span>Expenses</span><strong>KSh {{money(expenses)}}</strong></div>
+<div class="metric"><span>Net profit</span><strong>KSh {{money(net)}}</strong></div>
+</div>
+
+<section class="panel">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+<div><h2>Daily profit</h2><p class="muted">Gross profit minus recorded expenses.</p></div>
+<a href="{{url_for('reports_csv',start=start,end=end)}}" class="small-btn">Download CSV</a>
+</div>
+
+<div class="table-wrap"><table>
+<tr><th>Date</th><th>Day</th><th>6kg Sold</th><th>13kg Sold</th><th>Sales</th><th>Expenses</th><th>Net Profit</th></tr>
+{% for r in daily %}
+<tr><td>{{r.date}}</td><td>{{r.day}}</td><td>{{r.six_kg_sold}}</td><td>{{r.thirteen_kg_sold}}</td><td>KSh {{money(r.sales)}}</td><td>KSh {{money(r.expenses)}}</td><td><strong>KSh {{money(r.net_profit)}}</strong></td></tr>
+{% else %}
+<tr><td colspan="7">No sales recorded for this date range.</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section class="panel">
+<h2>Current inventory</h2>
+<div class="metric-grid">
+<div class="metric"><span>6kg full</span><strong>{{stock.six_full}}</strong></div>
+<div class="metric"><span>6kg empty</span><strong>{{stock.six_empty}}</strong></div>
+<div class="metric"><span>13kg full</span><strong>{{stock.thirteen_full}}</strong></div>
+<div class="metric"><span>13kg empty</span><strong>{{stock.thirteen_empty}}</strong></div>
+</div>
+</section>
+
+<section class="panel">
+<h2>Sales by product</h2>
+<div class="table-wrap"><table>
+<tr><th>Product</th><th>Units sold</th><th>Sales</th><th>Gross profit</th></tr>
+{% for r in rows %}
+<tr><td>{{r.brand}} {{r.size}}</td><td>{{r.qty}}</td><td>KSh {{money(r.sales)}}</td><td>KSh {{money(r.profit)}}</td></tr>
+{% else %}
+<tr><td colspan="4">No sales recorded.</td></tr>
+{% endfor %}
+</table></div>
+</section>
+{% endblock %}

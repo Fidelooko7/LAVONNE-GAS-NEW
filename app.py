@@ -28,6 +28,9 @@ if not SECRET_FILE.exists():
     SECRET_FILE.write_text(secrets.token_urlsafe(48))
 app.secret_key = os.environ.get('LAVONNE_SECRET') or SECRET_FILE.read_text().strip()
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 ALLOWED = {'png','jpg','jpeg','webp'}
 
@@ -430,7 +433,7 @@ def login():
     if request.method=='POST':
         c=db(); u=c.execute('SELECT * FROM users WHERE username=? AND active=1',(request.form.get('username','').strip(),)).fetchone(); c.close()
         if u and check_password_hash(u['password_hash'],request.form.get('password','')):
-            session.clear(); session['uid']=u['id']; audit('login','Signed in'); return redirect(request.args.get('next') or url_for('dashboard'))
+            session.clear(); session['uid']=u['id']; session.permanent = True; audit('login','Signed in'); return redirect(request.args.get('next') or url_for('dashboard'))
         flash('Incorrect username or password.','error')
     return render_template('login.html')
 
@@ -632,10 +635,153 @@ def update_order(oid):
 @app.route('/reports')
 @admin_required
 def reports():
-    start=request.args.get('start',today()); end=request.args.get('end',today())
-    c=db(); rows=c.execute('SELECT p.brand,p.size,SUM(s.qty) qty,SUM(s.total) sales,SUM((s.unit_price-s.unit_cost)*s.qty) profit FROM sales s JOIN products p ON p.id=s.product_id WHERE CAST(s.sale_date AS DATE) BETWEEN ? AND ? GROUP BY p.id ORDER BY sales DESC',(start,end)).fetchall()
-    total=c.execute('SELECT COALESCE(SUM(total),0) sales,COALESCE(SUM(paid),0) collected,COALESCE(SUM((unit_price-unit_cost)*qty),0) gross_profit FROM sales WHERE CAST(sale_date AS DATE) BETWEEN ? AND ?',(start,end)).fetchone()['sales']; collected=c.execute('SELECT COALESCE(SUM(paid),0) n FROM sales WHERE CAST(sale_date AS DATE) BETWEEN ? AND ?',(start,end)).fetchone()['n']; gp=c.execute('SELECT COALESCE(SUM((unit_price-unit_cost)*qty),0) n FROM sales WHERE CAST(sale_date AS DATE) BETWEEN ? AND ?',(start,end)).fetchone()['n']; exp=c.execute('SELECT COALESCE(SUM(amount),0) n FROM expenses WHERE expense_date BETWEEN ? AND ?',(start,end)).fetchone()['n']; stock=c.execute('SELECT COALESCE(SUM(full_qty),0) fulls,COALESCE(SUM(empty_qty),0) empties FROM stock').fetchone(); c.close()
-    return render_template('reports.html',start=start,end=end,rows=rows,total=total,collected=collected,gp=gp,expenses=exp,net=money(gp-exp),stock=stock)
+    start = request.args.get('start', today())
+    end = request.args.get('end', today())
+    c = db()
+
+    daily = c.execute("""
+        SELECT SUBSTR(CAST(s.sale_date AS TEXT),1,10) AS report_date,
+               COALESCE(SUM(s.total),0) AS sales,
+               COALESCE(SUM(s.paid),0) AS collected,
+               COALESCE(SUM((s.unit_price-s.unit_cost)*s.qty),0) AS gross_profit,
+               COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '6%' THEN s.qty ELSE 0 END),0) AS six_kg_sold,
+               COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '13%' THEN s.qty ELSE 0 END),0) AS thirteen_kg_sold
+        FROM sales s JOIN products p ON p.id=s.product_id
+        WHERE SUBSTR(CAST(s.sale_date AS TEXT),1,10) BETWEEN ? AND ?
+        GROUP BY SUBSTR(CAST(s.sale_date AS TEXT),1,10)
+        ORDER BY report_date DESC
+    """,(start,end)).fetchall()
+
+    expenses = c.execute("""
+        SELECT expense_date, COALESCE(SUM(amount),0) AS amount
+        FROM expenses
+        WHERE expense_date BETWEEN ? AND ?
+        GROUP BY expense_date
+    """,(start,end)).fetchall()
+
+    exp={str(x['expense_date']):float(x['amount'] or 0) for x in expenses}
+    daily_rows=[]
+
+    for r in daily:
+        d=str(r['report_date'])
+        gross=float(r['gross_profit'] or 0)
+        e=exp.get(d,0)
+        daily_rows.append({
+            'date':d,
+            'day':__import__('datetime').date.fromisoformat(d).strftime('%A'),
+            'sales':float(r['sales'] or 0),
+            'collected':float(r['collected'] or 0),
+            'gross_profit':gross,
+            'expenses':e,
+            'net_profit':gross-e,
+            'six_kg_sold':int(r['six_kg_sold'] or 0),
+            'thirteen_kg_sold':int(r['thirteen_kg_sold'] or 0)
+        })
+
+    rows=c.execute("""
+        SELECT p.brand,p.size,
+               COALESCE(SUM(s.qty),0) AS qty,
+               COALESCE(SUM(s.total),0) AS sales,
+               COALESCE(SUM((s.unit_price-s.unit_cost)*s.qty),0) AS profit
+        FROM sales s JOIN products p ON p.id=s.product_id
+        WHERE SUBSTR(CAST(s.sale_date AS TEXT),1,10) BETWEEN ? AND ?
+        GROUP BY p.id,p.brand,p.size
+        ORDER BY sales DESC
+    """,(start,end)).fetchall()
+
+    stock=c.execute("""
+        SELECT
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '6%' THEN s.full_qty ELSE 0 END),0) AS six_full,
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '6%' THEN s.empty_qty ELSE 0 END),0) AS six_empty,
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '13%' THEN s.full_qty ELSE 0 END),0) AS thirteen_full,
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '13%' THEN s.empty_qty ELSE 0 END),0) AS thirteen_empty
+        FROM stock s JOIN products p ON p.id=s.product_id
+    """).fetchone()
+
+    c.close()
+
+    total=sum(x['sales'] for x in daily_rows)
+    collected=sum(x['collected'] for x in daily_rows)
+    gp=sum(x['gross_profit'] for x in daily_rows)
+    exp_total=sum(x['expenses'] for x in daily_rows)
+
+    return render_template(
+        'reports.html',
+        start=start,end=end,daily=daily_rows,rows=rows,
+        total=total,collected=collected,gp=gp,
+        expenses=exp_total,net=gp-exp_total,
+        total_6kg=sum(x['six_kg_sold'] for x in daily_rows),
+        total_13kg=sum(x['thirteen_kg_sold'] for x in daily_rows),
+        stock=stock
+    )
+
+@app.route('/reports.csv')
+@admin_required
+def reports_csv():
+    import csv
+    from io import StringIO
+
+    start=request.args.get('start',today())
+    end=request.args.get('end',today())
+    c=db()
+
+    rows=c.execute("""
+        SELECT SUBSTR(CAST(s.sale_date AS TEXT),1,10) AS report_date,
+               COALESCE(SUM(s.total),0) AS sales,
+               COALESCE(SUM(s.paid),0) AS collected,
+               COALESCE(SUM((s.unit_price-s.unit_cost)*s.qty),0) AS gross_profit,
+               COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '6%' THEN s.qty ELSE 0 END),0) AS six_kg_sold,
+               COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '13%' THEN s.qty ELSE 0 END),0) AS thirteen_kg_sold
+        FROM sales s JOIN products p ON p.id=s.product_id
+        WHERE SUBSTR(CAST(s.sale_date AS TEXT),1,10) BETWEEN ? AND ?
+        GROUP BY SUBSTR(CAST(s.sale_date AS TEXT),1,10)
+        ORDER BY report_date DESC
+    """,(start,end)).fetchall()
+
+    expenses=c.execute("""
+        SELECT expense_date,COALESCE(SUM(amount),0) AS amount
+        FROM expenses
+        WHERE expense_date BETWEEN ? AND ?
+        GROUP BY expense_date
+    """,(start,end)).fetchall()
+
+    exp={str(x['expense_date']):float(x['amount'] or 0) for x in expenses}
+
+    stock=c.execute("""
+        SELECT
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '6%' THEN s.full_qty ELSE 0 END),0) AS six_full,
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '6%' THEN s.empty_qty ELSE 0 END),0) AS six_empty,
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '13%' THEN s.full_qty ELSE 0 END),0) AS thirteen_full,
+        COALESCE(SUM(CASE WHEN LOWER(p.size) LIKE '13%' THEN s.empty_qty ELSE 0 END),0) AS thirteen_empty
+        FROM stock s JOIN products p ON p.id=s.product_id
+    """).fetchone()
+
+    out=StringIO()
+    w=csv.writer(out)
+    w.writerow(['Date','Day','6kg Sold','13kg Sold','Sales','Collected',
+                'Gross Profit','Expenses','Net Profit','6kg Full','6kg Empty',
+                '13kg Full','13kg Empty'])
+
+    for r in rows:
+        d=str(r['report_date'])
+        gross=float(r['gross_profit'] or 0)
+        e=exp.get(d,0)
+        w.writerow([
+            d,__import__('datetime').date.fromisoformat(d).strftime('%A'),
+            int(r['six_kg_sold'] or 0),int(r['thirteen_kg_sold'] or 0),
+            round(float(r['sales'] or 0),2),round(float(r['collected'] or 0),2),
+            round(gross,2),round(e,2),round(gross-e,2),
+            stock['six_full'],stock['six_empty'],
+            stock['thirteen_full'],stock['thirteen_empty']
+        ])
+
+    c.close()
+    return Response(
+        out.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition':
+                 f'attachment; filename=lavonne_daily_report_{start}_to_{end}.csv'}
+    )
 @app.route('/team',methods=['GET','POST'])
 @admin_required
 def team():

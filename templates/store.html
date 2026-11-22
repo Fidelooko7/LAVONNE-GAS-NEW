@@ -1,3 +1,53 @@
+
+<style>
+/* Large announcement photo area */
+.news-image {
+  width: 100%;
+  min-height: 320px;
+  max-height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.news-image img {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  max-height: 520px;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+</style>
+
+
+<style>
+.hero-new {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-new::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("/static/images/lavonne-gas-watermark.jpg");
+  background-size: cover;
+  background-position: center;
+  opacity: 0.30;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-new > * {
+  position: relative;
+  z-index: 1;
+}
+</style>
+
 {% extends 'base.html' %}
 {% block title %}Order Gas | Lavonne Gas{% endblock %}
 {% block content %}
