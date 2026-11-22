@@ -56,10 +56,18 @@
         <i class="fas fa-cart-shopping"></i> <span>Sales</span>
       </a>
       <a href="{{ url_for('orders') }}" class="nav-item">
-        <i class="fas fa-clipboard-list"></i> <span>Orders</span>
+        <i class="fas fa-clipboard-list"></i>
+        <span>Orders</span>
+        {% if active_order_count > 0 %}
+        <span style="margin-left:auto;background:var(--primary);color:#fff;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700;">{{ active_order_count }}</span>
+        {% endif %}
       </a>
       <a href="{{ url_for('debts') }}" class="nav-item">
-        <i class="fas fa-hand-holding-dollar"></i> <span>Debts</span>
+        <i class="fas fa-hand-holding-dollar"></i>
+        <span>Debts</span>
+        {% if active_debt_count > 0 %}
+        <span style="margin-left:auto;background:var(--primary);color:#fff;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700;">{{ active_debt_count }}</span>
+        {% endif %}
       </a>
       <a href="{{ url_for('customers') }}" class="nav-item">
         <i class="fas fa-users"></i> <span>Customers</span>

@@ -413,6 +413,45 @@ def get_products(active_only=False):
 def balance(c, debt_id):
     r=c.execute('SELECT d.original-COALESCE(SUM(p.amount),0) bal FROM debts d LEFT JOIN debt_payments p ON p.debt_id=d.id WHERE d.id=? GROUP BY d.id',(debt_id,)).fetchone(); return money(r['bal'] if r else 0)
 
+
+@app.context_processor
+def inject_active_debt_count():
+    if not session.get('uid'):
+        return {'active_debt_count': 0}
+    c = db()
+    count = c.execute("""
+        SELECT COUNT(*) AS n
+        FROM debts d
+        LEFT JOIN (
+            SELECT debt_id, SUM(amount) AS paid
+            FROM debt_payments
+            GROUP BY debt_id
+        ) p ON p.debt_id = d.id
+        WHERE (d.original - COALESCE(p.paid, 0)) > 0.005
+    """).fetchone()['n']
+    c.close()
+    return {'active_debt_count': count}
+
+
+@app.context_processor
+def inject_active_order_count():
+    if not session.get('uid'):
+        return {'active_order_count': 0}
+    c = db()
+    try:
+        count = c.execute("""
+            SELECT COUNT(*) AS n
+            FROM orders
+            WHERE order_status IN (
+                'new', 'awaiting_payment',
+                'authorised', 'out_for_delivery'
+            )
+        """).fetchone()['n']
+    finally:
+        c.close()
+    return {'active_order_count': count}
+
+
 @app.route('/')
 def home():
     products=get_products(True)
