@@ -72,7 +72,7 @@ class PostgreSQLCompat:
 
     def execute(self, query, params=()):
         # The app's SQL statements use ? only as parameter placeholders.
-        return self.raw.execute(query.replace('?', '%s'), params)
+        return self.raw.execute(query.replace('%', '%%').replace('?', '%s'), params)
 
     def commit(self):
         self.raw.commit()
