@@ -1354,21 +1354,10 @@ def download_apk():
 @app.route('/admin/reset-business-data')
 @admin_required
 def reset_business_data():
-    confirm = request.args.get('confirm', '')
-    if confirm != 'RESET_LAVONNE_DATA':
+    if request.args.get('confirm') != 'RESET_LAVONNE_DATA':
         abort(403)
 
     c = db()
-
-    # Prevent accidental second execution.
-    existing = c.execute(
-        "SELECT value FROM settings WHERE key=?",
-        ('production_data_reset_done',)
-    ).fetchone()
-
-    if existing:
-        c.close()
-        abort(410)
 
     tables = [
         'debt_payments',
@@ -1388,18 +1377,22 @@ def reset_business_data():
         'audit'
     ]
 
+    deleted = {}
+
     try:
         for table in tables:
             c.execute(f'DELETE FROM "{table}"')
-
-        c.execute(
-            "INSERT INTO settings(key,value) VALUES(?,?)",
-            ('production_data_reset_done', '2026-11-23')
-        )
+            deleted[table] = c.execute(
+                f'SELECT COUNT(*) AS n FROM "{table}"'
+            ).fetchone()['n']
 
         c.commit()
         c.close()
-        return 'LAVONNE BUSINESS DATA CLEARED SUCCESSFULLY. USERS AND DATABASE SCHEMA WERE PRESERVED.'
+
+        return '<h2>Lavonne Gas business data cleared successfully.</h2>' \
+               '<p>All selected business tables now contain 0 records.</p>' \
+               '<p>Admin and employee users were preserved.</p>' \
+               '<pre>' + str(deleted) + '</pre>'
 
     except Exception:
         c.rollback()
