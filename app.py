@@ -1377,28 +1377,55 @@ def reset_business_data():
         'audit'
     ]
 
-    deleted = {}
-
     try:
-        for table in tables:
-            c.execute(f'DELETE FROM "{table}"')
-            deleted[table] = c.execute(
-                f'SELECT COUNT(*) AS n FROM "{table}"'
-            ).fetchone()['n']
+        if USE_POSTGRES:
+            c.execute("""
+                TRUNCATE TABLE
+                    debt_payments,
+                    debts,
+                    sales,
+                    orders,
+                    purchases,
+                    expenses,
+                    stock_confirmations,
+                    cylinder_deposits,
+                    stock,
+                    products,
+                    customers,
+                    news,
+                    notifications,
+                    device_tokens,
+                    audit
+                RESTART IDENTITY
+            """)
+        else:
+            for table in tables:
+                c.execute(f'DELETE FROM "{table}"')
 
         c.commit()
-        c.close()
 
-        return '<h2>Lavonne Gas business data cleared successfully.</h2>' \
-               '<p>All selected business tables now contain 0 records.</p>' \
-               '<p>Admin and employee users were preserved.</p>' \
-               '<pre>' + str(deleted) + '</pre>'
+        cleared = []
+        for table in tables:
+            try:
+                n = c.execute(
+                    f'SELECT COUNT(*) AS n FROM "{table}"'
+                ).fetchone()['n']
+                cleared.append(f"{table}: {n} remaining")
+            except Exception as e:
+                cleared.append(f"{table}: check failed - {e}")
+
+        result = "<h2>Lavonne Gas reset completed</h2>"
+        result += "<h3>Business data after reset</h3><pre>" + "\\n".join(cleared) + "</pre>"
+        result += "<p><b>Users were NOT deleted.</b></p>"
+        result += "<p><b>Database schema was NOT deleted.</b></p>"
+
+        c.close()
+        return result
 
     except Exception:
         c.rollback()
         c.close()
         raise
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
