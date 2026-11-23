@@ -1350,6 +1350,63 @@ def download_apk():
         as_attachment=True
     )
 
+
+@app.route('/admin/reset-business-data')
+@admin_required
+def reset_business_data():
+    confirm = request.args.get('confirm', '')
+    if confirm != 'RESET_LAVONNE_DATA':
+        abort(403)
+
+    c = db()
+
+    # Prevent accidental second execution.
+    existing = c.execute(
+        "SELECT value FROM settings WHERE key=?",
+        ('production_data_reset_done',)
+    ).fetchone()
+
+    if existing:
+        c.close()
+        abort(410)
+
+    tables = [
+        'debt_payments',
+        'debts',
+        'sales',
+        'orders',
+        'purchases',
+        'expenses',
+        'stock_confirmations',
+        'cylinder_deposits',
+        'stock',
+        'products',
+        'customers',
+        'news',
+        'notifications',
+        'device_tokens',
+        'audit'
+    ]
+
+    try:
+        for table in tables:
+            c.execute(f'DELETE FROM "{table}"')
+
+        c.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            ('production_data_reset_done', '2026-11-23')
+        )
+
+        c.commit()
+        c.close()
+        return 'LAVONNE BUSINESS DATA CLEARED SUCCESSFULLY. USERS AND DATABASE SCHEMA WERE PRESERVED.'
+
+    except Exception:
+        c.rollback()
+        c.close()
+        raise
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
