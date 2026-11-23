@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width:520px;margin:40px auto;padding:30px;text-align:center;background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.10);">
+
+    <h1 style="color:#14304d;margin-bottom:8px;">LAVONNE GAS</h1>
+
+    <p style="font-size:18px;margin:8px 0;">
+        Quality Gas at Your Doorstep
+    </p>
+
+    <p style="color:#666;margin:20px 0;">
+        Order your gas conveniently from your phone.
+    </p>
+
+    <a href="{{ url_for('download_apk') }}"
+       style="display:inline-block;padding:15px 28px;background:#144b73;color:white;text-decoration:none;border-radius:10px;font-weight:bold;">
+        DOWNLOAD LAVONNE GAS APP
+    </a>
+
+    <p style="font-size:12px;color:#777;margin-top:22px;">
+        Android app • Free download
+    </p>
+
+</div>
+{% endblock %}

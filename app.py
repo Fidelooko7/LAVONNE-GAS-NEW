@@ -1,4 +1,4 @@
-from flask import Response, Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify
+from flask import Response, Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
@@ -1338,6 +1338,19 @@ def sitemap_xml():
     xml += '</urlset>'
     return Response(xml, mimetype='application/xml')
 
+@app.route('/download')
+def download_app():
+    return render_template('download.html')
+
+@app.route('/download/apk')
+def download_apk():
+    return send_from_directory(
+        os.path.join(app.root_path, 'static', 'downloads'),
+        'Lavonne-Gas.apk',
+        as_attachment=True
+    )
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
